@@ -10,7 +10,7 @@ but it can also be used as a general beamformer.
 
 ```bash
 > pip install cupy-cuda102  # modify according to your CUDA version (https://docs.cupy.dev/en/stable/install.html#installing-cupy)
-> pip install souden-mvdr-beamformer
+> pip install beamformer-gpu
 ```
 
 ## Usage

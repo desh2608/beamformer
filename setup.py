@@ -11,9 +11,9 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
     long_description = f.read()
 
 setup(
-    name="beamformer",
+    name="beamformer-gpu",
     version="0.1.0",
-    description="Souden MVDR beamformer with CuPy",
+    description="Souden MVDR beamformer on GPU with CuPy",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/desh2608/beamformer",
