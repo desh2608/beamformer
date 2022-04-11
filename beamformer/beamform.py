@@ -1,3 +1,6 @@
+# The functions here are modified from the corresponding implementations in:
+# https://github.com/fgnt/pb_bss/blob/master/pb_bss/extraction/beamformer.py
+
 import functools
 import operator
 import cupy as cp
@@ -20,39 +23,6 @@ def get_power_spectral_density_matrix(
     time_dim=-1,
     normalize=True,
 ):
-    """
-    Calculates the weighted power spectral density matrix.
-    It's also called covariance matrix.
-    With the dim parameters you can change the sort of the dims of the
-    observation and mask, but not every combination is allowed.
-
-    :param observation: Complex observations with shape (..., sensors, frames)
-    :param mask: Masks with shape (bins, frames) or (..., sources, frames)
-    :param sensor_dim: change sensor dimension index (Default: -2)
-    :param source_dim: change source dimension index (Default: -2),
-        source_dim = 0 means mask shape (sources, ..., frames)
-    :param time_dim:  change time dimension index (Default: -1),
-        this index must match for mask and observation
-    :param normalize: Boolean to decide if normalize the mask
-    :return: PSD matrix with shape (..., sensors, sensors)
-        or (..., sources, sensors, sensors) or
-        (sources, ..., sensors, sensors)
-        if source_dim % observation.ndim < -2 respectively
-        mask shape (sources, ..., frames)
-
-    Examples
-    --------
-    >>> F, T, D, K = 51, 31, 6, 2
-    >>> X = np.random.randn(F, D, T) + 1j * np.random.randn(F, D, T)
-    >>> mask = np.random.randn(F, K, T)
-    >>> mask = mask / np.sum(mask, axis=0, keepdims=True)
-    >>> get_power_spectral_density_matrix(X, mask=mask).shape
-    (51, 2, 6, 6)
-    >>> mask = np.random.randn(F, T)
-    >>> mask = mask / np.sum(mask, axis=0, keepdims=True)
-    >>> get_power_spectral_density_matrix(X, mask=mask).shape
-    (51, 6, 6)
-    """
     # ensure negative dim indexes
     sensor_dim, source_dim, time_dim = (
         d % observation.ndim - observation.ndim
@@ -113,19 +83,6 @@ def get_power_spectral_density_matrix(
 
 
 def blind_analytic_normalization(vector, noise_psd_matrix):
-    """Reduces distortions by normalizing the beamforming vectors.
-
-    See Section III.A in the following paper:
-
-    Warsitz, Ernst, and Reinhold Haeb-Umbach. "Blind acoustic beamforming
-    based on generalized eigenvalue decomposition." IEEE Transactions on
-    audio, speech, and language processing 15.5 (2007): 1529-1539.
-
-    Args:
-        vector: Beamforming vector with shape (..., sensors)
-        noise_psd_matrix: With shape (..., sensors, sensors)
-
-    """
     nominator = cp.einsum(
         "...a,...ab,...bc,...c->...",
         vector.conj(),
@@ -140,6 +97,7 @@ def blind_analytic_normalization(vector, noise_psd_matrix):
     )
     denominator = cp.sqrt(denominator * denominator.conj())
 
+    # We do the division in numpy since the `where` argument is not available in cupy
     nominator = cp.asnumpy(nominator)
     denominator = cp.asnumpy(denominator)
     normalization = np.divide(  # https://stackoverflow.com/a/37977222/5766934
@@ -151,15 +109,6 @@ def blind_analytic_normalization(vector, noise_psd_matrix):
 
 
 def apply_beamforming_vector(vector, mix):
-    """Applies a beamforming vector such that the sensor dimension disappears.
-
-    Although this function may seem simple, it turned out that using it
-    reduced implementation errors in practice quite a bit.
-
-    :param vector: Beamforming vector with dimensions ..., sensors
-    :param mix: Observed signal with dimensions ..., sensors, time-frames
-    :return: A beamformed signal with dimensions ..., time-frames
-    """
     assert vector.shape[-1] < 30, (vector.shape, mix.shape)
     return cp.einsum("...a,...at->...t", vector.conj(), mix)
 
@@ -192,70 +141,11 @@ def get_optimal_reference_channel(
 
 
 def stable_solve(A, B):
-    """
-    Use np.linalg.solve with fallback to np.linalg.lstsq.
-    Equal to np.linalg.lstsq but faster.
-    Note: limited currently by A.shape == B.shape
-    This function tries np.linalg.solve with independent dimensions,
-    when this is not working the function fall back to np.linalg.solve
-    for each matrix. If one matrix does not work it falls back to
-    np.linalg.lstsq.
-    The reason for not using np.linalg.lstsq directly is the execution time.
-    Examples:
-    A and B have the shape (500, 6, 6), than a loop over lstsq takes
-    108 ms and this function 28 ms for the case that one matrix is singular
-    else 1 ms.
-    >>> def normal(shape):
-    ...     return np.random.normal(size=shape) + 1j * np.random.normal(size=shape)
-    >>> A = normal((6, 6))
-    >>> B = normal((6, 6))
-    >>> C1 = np.linalg.solve(A, B)
-    >>> C2, *_ = np.linalg.lstsq(A, B)
-    >>> C3 = stable_solve(A, B)
-    >>> C4 = _lstsq(A, B)
-    >>> np.testing.assert_allclose(C1, C2)
-    >>> np.testing.assert_allclose(C1, C3)
-    >>> np.testing.assert_allclose(C1, C4)
-    >>> A = np.zeros((6, 6), dtype=np.complex128)
-    >>> B = np.zeros((6, 6), dtype=np.complex128)
-    >>> C1 = np.linalg.solve(A, B)
-    Traceback (most recent call last):
-    ...
-    numpy.linalg.LinAlgError: Singular matrix
-    >>> C2, *_ = np.linalg.lstsq(A, B)
-    >>> C3 = stable_solve(A, B)
-    >>> C4 = _lstsq(A, B)
-    >>> np.testing.assert_allclose(C2, C3)
-    >>> np.testing.assert_allclose(C2, C4)
-    >>> A = normal((3, 6, 6))
-    >>> B = normal((3, 6, 6))
-    >>> C1 = np.linalg.solve(A, B)
-    >>> C2, *_ = np.linalg.lstsq(A, B)
-    Traceback (most recent call last):
-    ...
-    numpy.linalg.LinAlgError: 3-dimensional array given. Array must be two-dimensional
-    >>> C3 = stable_solve(A, B)
-    >>> C4 = _lstsq(A, B)
-    >>> np.testing.assert_allclose(C1, C3)
-    >>> np.testing.assert_allclose(C1, C4)
-    >>> A[2, 3, :] = 0
-    >>> C1 = np.linalg.solve(A, B)
-    Traceback (most recent call last):
-    ...
-    numpy.linalg.LinAlgError: Singular matrix
-    >>> C2, *_ = np.linalg.lstsq(A, B)
-    Traceback (most recent call last):
-    ...
-    numpy.linalg.LinAlgError: 3-dimensional array given. Array must be two-dimensional
-    >>> C3 = stable_solve(A, B)
-    >>> C4 = _lstsq(A, B)
-    >>> np.testing.assert_allclose(C3, C4)
-    """
     assert A.shape[:-2] == B.shape[:-2], (A.shape, B.shape)
     assert A.shape[-1] == B.shape[-2], (A.shape, B.shape)
     try:
         return cp.linalg.solve(A, B)
-    except cp.linalg.LinAlgError:
+    except:  # noqa
         shape_A, shape_B = A.shape, B.shape
         assert shape_A[:-2] == shape_A[:-2]
         working_shape_A = [
@@ -285,52 +175,6 @@ def get_mvdr_vector_souden(
     ref_channel=None,
     eps=None,
 ):
-    """
-    Returns the MVDR beamforming vector described in [Souden2010MVDR].
-    The implementation is based on the description of [Erdogan2016MVDR].
-
-    The ref_channel is selected based of an SNR estimate.
-
-    The eps ensures that the SNR estimation for the ref_channel works
-    as long target_psd_matrix and noise_psd_matrix do not contain inf or nan.
-    Also zero matrices work. The default eps is the smallest non zero value.
-
-    Note: the frequency dimension is necessary for the ref_channel estimation.
-    Note: Currently this function does not support independent dimensions with
-          an estimated ref_channel. There is an open point to discuss:
-          Should the independent dimension be considered in the SNR estimate
-          or not?
-
-    :param target_psd_matrix: Target PSD matrix
-        with shape (..., bins, sensors, sensors)
-    :param noise_psd_matrix: Noise PSD matrix
-        with shape (..., bins, sensors, sensors)
-    :param ref_channel:
-    :param return_ref_channel:
-    :param eps: If None use the smallest number bigger than zero.
-    :return: Set of beamforming vectors with shape (bins, sensors)
-
-    Returns:
-
-    @article{Souden2010MVDR,
-      title={On optimal frequency-domain multichannel linear filtering for noise reduction},
-      author={Souden, Mehrez and Benesty, Jacob and Affes, Sofi{\`e}ne},
-      journal={IEEE Transactions on audio, speech, and language processing},
-      volume={18},
-      number={2},
-      pages={260--276},
-      year={2010},
-      publisher={IEEE}
-    }
-    @inproceedings{Erdogan2016MVDR,
-      title={Improved MVDR Beamforming Using Single-Channel Mask Prediction Networks.},
-      author={Erdogan, Hakan and Hershey, John R and Watanabe, Shinji and Mandel, Michael I and Le Roux, Jonathan},
-      booktitle={Interspeech},
-      pages={1981--1985},
-      year={2016}
-    }
-
-    """
     assert noise_psd_matrix is not None
 
     phi = stable_solve(noise_psd_matrix, target_psd_matrix)

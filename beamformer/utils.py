@@ -1,3 +1,6 @@
+# The functions in this file are modified from:
+# https://github.com/fgnt/pb_chime5/blob/master/pb_chime5/utils/numpy_utils.py
+
 import re
 
 import cupy as cp

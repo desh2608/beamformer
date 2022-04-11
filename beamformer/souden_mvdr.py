@@ -10,6 +10,9 @@ from beamformer.beamform import (
     apply_beamforming_vector,
 )
 
+# The _Beamformer class is modified from:
+# https://github.com/fgnt/pb_chime5/blob/master/pb_chime5/speech_enhancement/beamforming_wrapper.py
+
 
 class _Beamformer:
     def __init__(
@@ -73,6 +76,16 @@ class _Beamformer:
 
 
 def beamform_mvdr(Y, X_mask, N_mask, ban=False):
+    """
+    Souden MVDR beamformer.
+    Args:
+        Y: CuPy array of shape (channel, time, frequency).
+        X_mask: CuPy array of shape (time, frequency).
+        N_mask: CuPy array of shape (time, frequency).
+        ban: If True, use blind analytic normalization.
+    Returns:
+        X_hat: Beamformed signal, CuPy array of shape (time, frequency).
+    """
     bf = _Beamformer(
         Y=Y,
         X_mask=X_mask,
